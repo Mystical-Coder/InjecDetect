@@ -1,0 +1,61 @@
+# Server port for the Spring Cloud Gateway
+server:
+  port: 8080
+
+# Spring Boot application name
+spring:
+  application:
+    name: security-gateway
+
+  # Configuration for the reactive WebFlux stack
+  webflux:
+    # Key for codecs configuration (replaces the deprecated spring.codec.*)
+    codecs:
+      # Set the maximum buffer size for request bodies to prevent memory issues.
+      max-in-memory-size: 1MB # Adjust based on your expected body size
+
+  # Define the routes for the gateway.
+  cloud:
+    gateway:
+      # Key for gateway configuration (replaces the deprecated spring.cloud.gateway.*)
+      server:
+        webflux:
+          routes:
+            - id: upstream_service_route
+              # The destination URI. Change this to your actual backend service URL.
+              uri: http://localhost:8081
+              predicates:
+                - Path=/api/**
+
+# --- SQL Injection Detection Configuration ---
+sqli-detection:
+  # Master switch to enable or disable the detection filter
+  enabled: true
+  # Base URL of your Python/FastAPI model scoring service (without the /predict path)
+  model-service-url: "http://localhost:8000"
+  # Timeout for the WebClient call to the model service.
+  # Increased to 15 seconds to handle the model's initial "cold start" time.
+  model-service-timeout-ms: 15000
+  # Fail-strategy: true for fail-open (prioritizes availability), false for fail-closed (prioritizes security)
+  fail-open: true
+  # Cache settings for identical request payloads to reduce model calls
+  cache:
+    ttl-seconds: 300 # Cache results for 5 minutes
+    max-size: 10000  # Store up to 10,000 unique request signatures
+
+  # Thresholds for decision making based on the model's score
+  thresholds:
+    block: 0.90   # Block if score >= 0.90
+    monitor: 0.75 # Monitor (log with high severity) if 0.75 <= score < 0.90
+
+# --- Resilience4j Circuit Breaker Configuration ---
+resilience4j.circuitbreaker:
+  instances:
+    modelService:
+      registerHealthIndicator: true
+      slidingWindowType: COUNT_BASED
+      slidingWindowSize: 20
+      failureRateThreshold: 50 # If 50% of the last 20 calls fail, open the circuit
+      waitDurationInOpenState: 10s # Wait 10 seconds before transitioning to half-open
+      permittedNumberOfCallsInHalfOpenState: 5
+      automaticTransitionFromOpenToHalfOpenEnabled: true
