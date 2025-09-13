@@ -4,7 +4,6 @@ app = Flask(__name__)
 
 @app.route('/api/v1/user', methods=['GET', 'POST'])
 def handle_user():
-    """ A simple endpoint that echoes back request info. """
     response_data = {
         "message": "Request successfully received by upstream service!",
         "method": request.method,

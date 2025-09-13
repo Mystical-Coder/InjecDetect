@@ -41,7 +41,6 @@ public class SQLiDetectionFilter implements GlobalFilter, Ordered {
     private final TelemetryService telemetryService;
     private final Cache sqlCache;
 
-    // --- Configurable Properties ---
     @Value("${sqli-detection.enabled:true}")
     private boolean enabled;
     @Value("${sqli-detection.fail-open:true}")
@@ -126,22 +125,14 @@ public class SQLiDetectionFilter implements GlobalFilter, Ordered {
                 .map(this::evaluateScore);
     }
 
-    /**
-     * Fallback method for the circuit breaker.
-     * Must return a Mono of the same type as the one it's protecting (Mono<ModelResponse>).
-     */
     private Mono<ModelResponse> handleFailure(Throwable throwable) {
         log.error("SQLi model service call failed: {}", throwable.getMessage());
         telemetryService.logFailure(throwable);
         if (failOpen) {
             log.warn("Failing open. Allowing request to pass by returning a safe score.");
-            // Return a ModelResponse with a safe score.
-            // The subsequent .map(this::evaluateScore) will turn this into an ALLOW decision.
             return Mono.just(new ModelResponse(0.0));
         } else {
             log.error("Failing closed. Propagating error to block request.");
-            // Propagate the original error. This will terminate the reactive chain with an error,
-            // resulting in a 500 response, effectively blocking the request.
             return Mono.error(throwable);
         }
     }
