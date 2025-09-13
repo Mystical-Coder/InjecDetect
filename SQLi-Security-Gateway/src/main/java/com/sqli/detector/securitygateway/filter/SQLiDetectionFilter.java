@@ -4,6 +4,7 @@ import com.sqli.detector.securitygateway.dto.Action;
 import com.sqli.detector.securitygateway.dto.Decision;
 import com.sqli.detector.securitygateway.dto.ModelRequest;
 import com.sqli.detector.securitygateway.dto.ModelResponse;
+import com.sqli.detector.securitygateway.service.IpThrottlingService;
 import com.sqli.detector.securitygateway.service.TelemetryService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,11 +36,11 @@ import java.util.concurrent.Callable;
 @Component
 public class SQLiDetectionFilter implements GlobalFilter, Ordered {
 
-
     private final WebClient webClient;
     private final ReactiveResilience4JCircuitBreakerFactory circuitBreakerFactory;
     private final TelemetryService telemetryService;
     private final Cache sqlCache;
+    private final IpThrottlingService ipThrottlingService; // Add this
 
     @Value("${sqli-detection.enabled:true}")
     private boolean enabled;
@@ -49,18 +50,20 @@ public class SQLiDetectionFilter implements GlobalFilter, Ordered {
     private double blockThreshold;
     @Value("${sqli-detection.thresholds.monitor}")
     private double monitorThreshold;
-    @Value("${sqli-detection.model-service-timeout-ms:2000}")
+    @Value("${sqli-detection.model-service-timeout-ms:15000}")
     private int modelServiceTimeoutMs;
 
     public SQLiDetectionFilter(WebClient.Builder webClientBuilder,
                                ReactiveResilience4JCircuitBreakerFactory cbFactory,
                                TelemetryService telemetryService,
                                CacheManager cacheManager,
+                               IpThrottlingService ipThrottlingService, // Add this
                                @Value("${sqli-detection.model-service-url}") String modelServiceUrl) {
         this.webClient = webClientBuilder.baseUrl(modelServiceUrl).build();
         this.circuitBreakerFactory = cbFactory;
         this.telemetryService = telemetryService;
         this.sqlCache = cacheManager.getCache("sqlDetectionCache");
+        this.ipThrottlingService = ipThrottlingService; // Add this
     }
 
     @Override
@@ -69,8 +72,21 @@ public class SQLiDetectionFilter implements GlobalFilter, Ordered {
             return chain.filter(exchange);
         }
 
-        ServerHttpRequest request = exchange.getRequest();
+        String clientIp = Objects.requireNonNull(exchange.getRequest().getRemoteAddress()).getAddress().getHostAddress();
 
+        return ipThrottlingService.isBlocked(clientIp)
+                .flatMap(isBlocked -> {
+                    if (isBlocked) {
+                        log.warn("Request from blocked IP {} rejected.", clientIp);
+                        exchange.getResponse().setStatusCode(HttpStatus.TOO_MANY_REQUESTS);
+                        return exchange.getResponse().setComplete();
+                    }
+                    return processRequest(exchange, chain, clientIp);
+                });
+    }
+
+    private Mono<Void> processRequest(ServerWebExchange exchange, GatewayFilterChain chain, String clientIp) {
+        ServerHttpRequest request = exchange.getRequest();
         return DataBufferUtils.join(request.getBody())
                 .flatMap(dataBuffer -> {
                     String body = dataBuffer.toString(StandardCharsets.UTF_8);
@@ -95,24 +111,23 @@ public class SQLiDetectionFilter implements GlobalFilter, Ordered {
                     return decisionMono.flatMap(decision -> {
                         telemetryService.logDecision(request, payload, decision);
 
-                        switch (decision.action()) {
-                            case BLOCK:
-                                log.warn("BLOCKING request due to high SQLi score: {}", decision.score());
-                                exchange.getResponse().setStatusCode(HttpStatus.FORBIDDEN);
-                                return exchange.getResponse().setComplete();
-                            case MONITOR:
-                                log.info("MONITORING request with medium SQLi score: {}", decision.score());
-                                return chain.filter(mutatedExchange);
-                            default:
-                                return chain.filter(mutatedExchange);
+                        if (decision.action() == Action.BLOCK) {
+                            ipThrottlingService.recordFailedAttempt(clientIp);
+                            log.warn("BLOCKING request due to high SQLi score: {}", decision.score());
+                            exchange.getResponse().setStatusCode(HttpStatus.FORBIDDEN);
+                            return exchange.getResponse().setComplete();
                         }
+
+                        if (decision.action() == Action.MONITOR) {
+                            log.info("MONITORING request with medium SQLi score: {}", decision.score());
+                        }
+                        return chain.filter(mutatedExchange);
                     });
                 });
     }
 
     private Mono<Decision> callModelService(String payload) {
         var circuitBreaker = circuitBreakerFactory.create("modelService");
-
         Mono<ModelResponse> responseMono = webClient.post()
                 .uri("/predict")
                 .bodyValue(new ModelRequest(payload))

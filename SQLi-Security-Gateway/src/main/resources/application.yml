@@ -5,6 +5,11 @@ spring:
   application:
     name: security-gateway
 
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
   webflux:
     codecs:
       max-in-memory-size: 1MB
@@ -31,6 +36,16 @@ sqli-detection:
   thresholds:
     block: 0.90
     monitor: 0.75
+
+    # --- New Dynamic IP Blocking Configuration ---
+  throttling:
+    enabled: true
+    # Number of blocked requests from an IP before it gets banned
+    max-attempts: 5
+    # The time window to track these attempts (in minutes)
+    time-window-minutes: 1
+    # How long to ban the IP for (in minutes)
+    block-duration-minutes: 15
 
 resilience4j.circuitbreaker:
   instances:
