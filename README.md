@@ -37,6 +37,7 @@
 * **Reactive Security Filter:** Non-blocking `GlobalFilter` in Spring Cloud Gateway (WebFlux) inspects 100% of traffic without impacting throughput.
 * **Resilience:** `Resilience4j` circuit breaker protects the gateway from downstream failures (fail-open strategy to preserve uptime).
 * **High-Performance Caching:** In-memory **Caffeine** cache for extremely fast repeat lookups.
+* **Intelligent Threat Tracking with Redis:** Tracks and counts malicious requests per IP and enforces temporary banlist/ratelimit when thresholds are exceeded.
 * **Decoupled Microservices:** Java gateway and Python AI service scale independently and enable faster iteration.
 
 ---
@@ -47,7 +48,7 @@
 
 * Framework: **Spring Boot**, **Spring Cloud Gateway (WebFlux)**
 * Resilience: **Resilience4j (Circuit Breaker)**
-* Caching: **Caffeine**
+* Caching: **Caffeine**, **Redis (for threat tracking & banlist)**
 * Build Tool: **Gradle**
 
 **Model Inference Service (Python)**
@@ -91,6 +92,7 @@
 * **Gradle 7.5** or higher
 * **Python 3.9+**
 * **pip** (Python package manager)
+* **Redis** (used for IP threat tracking and temporary banlist). You can run Redis locally or via Docker (example below).
 
 ### **Step 1: Start the Model Inference Service**
 
@@ -120,10 +122,21 @@ python dummy_service.py
 
 This will start the upstream mock on port **8081**.
 
-### **Step 3: Start the Security Gateway**
+### **Step 3: Start Redis (Threat Tracking)**
+
+You can run Redis locally or with Docker. Example (Docker):
+
+```bash
+docker run -p 6379:6379 --name sqli-redis -d redis:7
+```
+
+Default Redis host: `localhost:6379`.
+
+### **Step 4: Start the Security Gateway**
 
 1. Open a third terminal and `cd` into `SQLi-Security-Gateway/`.
-2. Run the Spring Boot application using Gradle:
+2. Make sure `application.yml` contains your Redis configuration (example shown below).
+3. Run the Spring Boot application using Gradle:
 
 ```bash
 ./gradlew bootRun
@@ -131,7 +144,7 @@ This will start the upstream mock on port **8081**.
 
 The gateway will listen on port **8080**.
 
-### **Step 4: Test the System**
+### **Step 5: Test the System**
 
 **Send a benign request (should be ALLOWED):**
 
@@ -143,7 +156,7 @@ curl -X POST http://localhost:8080/api/v1/user \
 
 Response: **200 OK**
 
-**Send a malicious request (should be BLOCKED):**
+**Send a malicious request (should be BLOCKED by AI):**
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/user \
@@ -153,4 +166,18 @@ curl -X POST http://localhost:8080/api/v1/user \
 
 Response: **403 Forbidden**
 
+**If an IP exceeds the configured malicious-attempt threshold it will be temporarily banlisted and receive:**
+
+Response: **429 Too Many Requests**
+
 ---
+
+## **Further Improvements (future work)**
+
+* Add a dashboard to visualize top attacker IPs and banlist statistics.
+* Implement adaptive thresholds per IP or per endpoint (e.g., tighter rules on login endpoints).
+* Use probabilistic data structures (e.g., Redis Bloom filter) for large-scale approximate counting.
+
+---
+
+*Last updated: 2025-09-13*
